@@ -1,0 +1,3 @@
+/home/awu666/lib/MyPorject/PopUpBlocker/build/CMakeFiles/popup_blocker.dir
+/home/awu666/lib/MyPorject/PopUpBlocker/build/CMakeFiles/edit_cache.dir
+/home/awu666/lib/MyPorject/PopUpBlocker/build/CMakeFiles/rebuild_cache.dir
