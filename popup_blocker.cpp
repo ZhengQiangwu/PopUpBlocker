@@ -39,14 +39,37 @@ std::string getProcessNameByPid(pid_t pid) {
     if (pid <= 0) {
         return "";
     }
-    std::string path = "/proc/" + std::to_string(pid) + "/comm";
-    std::ifstream comm_file(path);
-    if (comm_file.is_open()) {
-        std::string name;
-        std::getline(comm_file, name);
-        return name;
+    // 1. 优先尝试读取 /proc/[PID]/cmdline
+    std::string cmdline_path = "/proc/" + std::to_string(pid) + "/cmdline";
+    std::ifstream cmdline_file(cmdline_path);
+    if (cmdline_file.is_open()) {
+        std::string cmdline;
+        std::getline(cmdline_file, cmdline, '\0'); // 读取到第一个 \0 分隔符
+        
+        // 如果 cmdline 不为空
+        if (!cmdline.empty()) {
+            // 从完整路径中提取文件名
+            size_t last_slash = cmdline.rfind('/');
+            if (last_slash != std::string::npos) {
+                // 返回斜杠后面的部分
+                return cmdline.substr(last_slash + 1);
+            } else {
+                // 如果没有斜杠，本身就是文件名
+                return cmdline;
+            }
+        }
     }
-    return "";
+
+    // 2. 如果 cmdline 读取失败或为空，回退到 comm
+    std::string comm_path = "/proc/" + std::to_string(pid) + "/comm";
+    std::ifstream comm_file(comm_path);
+    if (comm_file.is_open()) {
+        std::string comm_name;
+        std::getline(comm_file, comm_name);
+        return comm_name;
+    }
+
+    return ""; // 如果都失败了，返回空
 }
 
 unsigned long getWindowLongProperty_internal(Display* display, Window window, const char* prop_name) {
@@ -275,24 +298,28 @@ void workerLoop() {
 
     while (g_isRunning) {
         int count = 0;
+	  //获取任务栏所有的窗口
         WindowInfo* windows = getTaskbarWindows_internal(display, &count);
 
         if (count > 0 && windows) {
             {
                 std::lock_guard<std::mutex> lock(g_dataMutex);
                 if (!g_blacklist.empty()) {
+                    //所有窗口的数量，一一比较每个窗口的进程名和类名是否与黑名单进行匹配
                     for (int i = 0; i < count; ++i) {
                         if (g_pendingCloseWindows.count(windows[i].id) > 0) {
                             continue;
                         }
                         bool should_block = false;
                         for (const auto& blockedName : g_blacklist) {
+                            //类名或者进程名与黑名单相同的时候开启拦截
                             if (std::strcmp(windows[i].process_name, blockedName.c_str()) == 0 ||
                                 std::strcmp(windows[i].wm_class, blockedName.c_str()) == 0) {
                                 should_block = true;
                                 break;
                             }
                         }
+                        //开启拦截
                         if (should_block) {
                             if (g_debugLoggingEnabled) {
                                 std::cout << "[库日志] 自动拦截匹配到黑名单的窗口: " << windows[i].title << std::endl;
@@ -438,6 +465,73 @@ WindowInfo* GetTaskbarWindows(int* count) {
     return result;
 }
 
+/**
+ * @brief 【新增实现】获取当前任务栏中所有应用程序窗口的标题列表。
+ */
+const char** GetTaskbarWindowTitles(int* count) {
+    *count = 0;
+    Display* display = XOpenDisplay(nullptr);
+    if (!display) {
+        return nullptr;
+    }
+
+    XErrorHandler old_handler = XSetErrorHandler(x11ErrorHandler);
+
+    // 获取顶级窗口列表的逻辑与 GetTaskbarWindows 相同
+    Window root = DefaultRootWindow(display);
+    Atom net_client_list_atom = XInternAtom(display, "_NET_CLIENT_LIST", False);
+    Atom actual_type;
+    int actual_format;
+    unsigned long nitems;
+    unsigned long bytes_after;
+    unsigned char* prop_data = nullptr;
+
+    g_x11_error_occurred = false;
+    XGetWindowProperty(display, root, net_client_list_atom, 0, 1024, False, XA_WINDOW,
+                       &actual_type, &actual_format, &nitems, &bytes_after, &prop_data);
+
+    if (g_x11_error_occurred || !prop_data) {
+        if (prop_data) {
+            XFree(prop_data);
+        }
+        XCloseDisplay(display);
+        return nullptr;
+    }
+
+    Window* window_list = (Window*)prop_data;
+    *count = nitems;
+    
+    if (*count == 0) {
+        XFree(prop_data);
+        XCloseDisplay(display);
+        return nullptr;
+    }
+
+    // 创建一个以NULL结尾的 char** 数组来存放标题
+    const char** titles_array = new const char*[*count + 1];
+    
+    for (unsigned long i = 0; i < nitems; ++i) {
+        Window win = window_list[i];
+        
+        // 只获取标题
+        std::string title = getWindowTitle(display, win);
+
+        // 为标题分配内存并复制
+        char* title_c = new char[title.length() + 1];
+        std::strcpy(title_c, title.c_str());
+        titles_array[i] = title_c;
+    }
+
+    // 设置数组的结尾为 NULL
+    titles_array[*count] = nullptr;
+
+    XFree(prop_data);
+    XSetErrorHandler(old_handler);
+    XCloseDisplay(display);
+    
+    return titles_array;
+}
+
 void FreeWindowInfoArray(WindowInfo* array, int count) {
     if (!array || count == 0) {
         return;
@@ -450,12 +544,23 @@ void FreeWindowInfoArray(WindowInfo* array, int count) {
     delete[] array;
 }
 
+/**
+ * @brief FreeStringArray 现在需要处理两种情况：
+ * GetBlacklist 返回的数组长度由 *count 决定。
+ * GetTaskbarWindowTitles 返回的数组以 NULL 结尾。
+ * 我们统一使用 count 来释放，以保持API一致性。
+ */
 void FreeStringArray(const char** array, int count) {
     if (!array || count == 0) {
         return;
     }
+    
     for (int i = 0; i < count; ++i) {
-        delete[] array[i];
+        // 检查指针是否为空，增加健壮性
+        if (array[i] != nullptr) {
+            delete[] array[i];
+        }
     }
+    
     delete[] array;
 }

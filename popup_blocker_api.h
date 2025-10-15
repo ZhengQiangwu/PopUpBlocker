@@ -64,7 +64,13 @@ const char** GetBlacklist(int* count);
  * @note 调用方必须在之后调用 FreeWindowInfoArray 来释放返回的数组内存。
  */
 WindowInfo* GetTaskbarWindows(int* count);
-
+/**
+ * @brief 获取当前任务栏中所有应用程序窗口的标题列表。
+ * @param count [out] 用于接收列表中的标题数量。
+ * @return 返回一个以NULL结尾的字符串数组 (const char**)，包含所有窗口标题。
+ * @note 调用方必须在之后调用 FreeStringArray 来释放返回的数组内存。
+ */
+const char** GetTaskbarWindowTitles(int* count);
 
 /**
  * @brief 释放由 GetTaskbarWindows 返回的内存。
@@ -73,11 +79,10 @@ WindowInfo* GetTaskbarWindows(int* count);
  */
 void FreeWindowInfoArray(WindowInfo* array, int count);
 
-
 /**
- * @brief 释放由 GetBlacklist 返回的内存。
- * @param array 指向 GetBlacklist 返回的数组的指针。
- * @param count GetBlacklist 返回的数量。
+ * @brief 释放由 GetBlacklist 或 GetTaskbarWindowTitles 返回的字符串数组内存。
+ * @param array 指向返回的数组的指针。
+ * @param count GetBlacklist 或 GetTaskbarWindowTitles 返回的数量。
  */
 void FreeStringArray(const char** array, int count);
 
